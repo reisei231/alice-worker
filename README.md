@@ -82,5 +82,6 @@ JSON object. Validate them against your schema before execution.
 
 Chat history is combined into one prompt. Both backends control generation
 settings such as temperature. This interface accepts text and function
-results. Structured outputs and token usage are unavailable. Use `POST /query`
+results. Structured outputs are unavailable. Token usage is reported only when
+the authenticated GigaChat API returns it. Use `POST /query`
 for Alice answers with structured source citations.

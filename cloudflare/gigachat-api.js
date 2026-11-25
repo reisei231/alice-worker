@@ -82,7 +82,14 @@ export async function runGigachatAPI(request, env, prompt) {
     if (typeof answer !== "string" || !answer.trim()) {
       throw new APIError(502, "GigaChat API returned no answer");
     }
-    return { answer, truncated: choice.finish_reason === "length" };
+    const { prompt_tokens, completion_tokens, total_tokens } = data.usage ?? {};
+    const validUsage = [prompt_tokens, completion_tokens, total_tokens]
+      .every((count) => Number.isSafeInteger(count) && count >= 0);
+    return {
+      answer,
+      truncated: choice.finish_reason === "length",
+      usage: validUsage ? { prompt_tokens, completion_tokens, total_tokens } : undefined,
+    };
   } catch (error) {
     if (request.signal.aborted) return { status: 408, error: "GigaChat request canceled", code: "canceled" };
     if (deadline.aborted) return { status: 504, error: "GigaChat request timed out", code: "timeout" };

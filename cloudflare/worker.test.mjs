@@ -168,3 +168,30 @@ test("authenticated GigaChat rejects requests if worker authentication is unconf
   assert.equal(res.status, 503);
   assert.equal((await res.json()).error.code, "model_unavailable");
 });
+
+test("Alice accepts include_usage without inventing usage", async (t) => {
+  mockAlice(t, () => toolReply);
+  const res = await completion({ tools: [tool], stream: true, stream_options: { include_usage: true } });
+  assert.equal(res.status, 200);
+  const chunks = (await res.text()).split("\n\n").filter((line) => line.startsWith("data: {"))
+    .map((line) => JSON.parse(line.slice(6)));
+  assert.equal(chunks.at(-1).choices[0].finish_reason, "tool_calls");
+  assert.ok(chunks.every((chunk) => chunk.usage === null));
+});
+
+test("the GigaChat stream reports upstream usage in a final separate chunk", async (t) => {
+  const usage = { prompt_tokens: 16, completion_tokens: 4, total_tokens: 20 };
+  t.mock.method(globalThis, "fetch", async (url) => url.includes("/oauth")
+    ? Response.json({ access_token: "usage-access", expires_at: Date.now() + 60_000 })
+    : Response.json({ choices: [{ message: { content: toolReply }, finish_reason: "stop" }], usage }));
+  const res = await completion({
+    model: "gigachat", tools: [tool], stream: true, stream_options: { include_usage: true },
+  }, { GIGACHAT_AUTH_KEY: "usage-key", ALICE_API_TOKEN: "worker-fixture" });
+  assert.equal(res.status, 200);
+  const chunks = (await res.text()).split("\n\n").filter((line) => line.startsWith("data: {"))
+    .map((line) => JSON.parse(line.slice(6)));
+  assert.equal(chunks.at(-2).choices[0].finish_reason, "tool_calls");
+  assert.equal(chunks.at(-2).usage, null);
+  assert.deepEqual(chunks.at(-1).choices, []);
+  assert.deepEqual(chunks.at(-1).usage, usage);
+});

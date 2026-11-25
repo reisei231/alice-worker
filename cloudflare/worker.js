@@ -670,7 +670,7 @@ async function runGigachatQuery(request, env, prompt) {
   }
 }
 
-function chatResponse({ content, toolCall }, model, stream, truncated = false) {
+function chatResponse({ content, toolCall }, model, { stream, includeUsage, truncated, usage }) {
   const id = "chatcmpl-" + crypto.randomUUID().replace(/-/g, "");
   const created = Math.floor(Date.now() / 1000);
   const metadata = { id, created, model };
@@ -681,21 +681,28 @@ function chatResponse({ content, toolCall }, model, stream, truncated = false) {
     return Response.json({
       ...metadata,
       object: "chat.completion",
+      ...(usage ? { usage } : {}),
       choices: [{ index: 0, message, finish_reason: finish, logprobs: null }],
     });
   }
 
-  function chunk(delta, finishReason = null) {
+  function event(choices, counts = null) {
     return "data: " + JSON.stringify({
       ...metadata,
       object: "chat.completion.chunk",
-      choices: [{ index: 0, delta, finish_reason: finishReason, logprobs: null }],
+      choices,
+      ...(includeUsage ? { usage: counts } : {}),
     }) + "\n\n";
+  }
+
+  function chunk(delta, finishReason = null) {
+    return event([{ index: 0, delta, finish_reason: finishReason, logprobs: null }]);
   }
   // Both backends provide final text to this adapter.
   const delta = toolCall ? { tool_calls: [{ index: 0, ...toolCall }] } : { content };
   const body = chunk({ role: "assistant", content: "" }) +
-    chunk(delta) + chunk({}, finish) + "data: [DONE]\n\n";
+    chunk(delta) + chunk({}, finish) +
+    (includeUsage && usage ? event([], usage) : "") + "data: [DONE]\n\n";
   return new Response(body, {
     headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache" },
   });
@@ -728,7 +735,9 @@ async function chat(request, env) {
     ["response_format", input.response_format == null || input.response_format.type === "text"],
     ["modalities", input.modalities == null || (Array.isArray(input.modalities) &&
       input.modalities.length === 1 && input.modalities[0] === "text")],
-    ["stream_options", !input.stream_options?.include_usage],
+    ["stream_options", input.stream_options == null || (input.stream === true &&
+      typeof input.stream_options === "object" && !Array.isArray(input.stream_options) &&
+      (input.stream_options.include_usage == null || typeof input.stream_options.include_usage === "boolean"))],
     ["logprobs", input.logprobs == null || input.logprobs === false],
   ]) {
     if (!supported) return openAIError(400, `Unsupported value for ${param}`, "unsupported_value", param);
@@ -760,7 +769,12 @@ async function chat(request, env) {
       return openAIError(502, "The model response was truncated before a tool decision could be read", "invalid_tool_call");
     }
     const output = chatOutput(result.answer, tools);
-    return chatResponse(output, input.model, input.stream, result.truncated);
+    return chatResponse(output, input.model, {
+      stream: input.stream,
+      includeUsage: input.stream_options?.include_usage === true,
+      truncated: result.truncated,
+      usage: result.usage,
+    });
   } catch (error) {
     return openAIError(502, error.message, "invalid_tool_call");
   }
